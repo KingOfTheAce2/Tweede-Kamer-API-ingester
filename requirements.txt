@@ -1,0 +1,4 @@
+requests
+lxml
+huggingface_hub
+datasets
