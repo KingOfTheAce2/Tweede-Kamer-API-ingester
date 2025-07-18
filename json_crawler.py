@@ -9,7 +9,6 @@ from pathlib import Path
 from huggingface_hub import HfApi, HfFolder
 
 # ========== Configuration ==========
-# You can also override these via environment variables or at the top of the file.
 BATCH_SIZE         = int(os.getenv("BATCH_SIZE", "100"))
 ODATA_URL          = os.getenv("ODATA_URL", "https://gegevensmagazijn.tweedekamer.nl/OData/v4/2.0/Document")
 ODATA_PARAMS       = json.loads(os.getenv("ODATA_PARAMS", '{"$filter": "Verwijderd eq false"}'))
@@ -36,18 +35,15 @@ def save_state(path: str, state: dict):
 
 # ========== Main Crawler ==========
 def fetch_documents(skip: int, top: int) -> List[Dict]:
-    """Fetch a batch of documents from the OData API."""
     params = ODATA_PARAMS.copy()
     params["$top"] = top
     params["$skip"] = skip
     resp = requests.get(ODATA_URL, params=params, timeout=60)
     resp.raise_for_status()
     data = resp.json()
-    # OData 4.0 returns results in 'value'
     return data.get("value", [])
 
 def clean_text(text):
-    """Remove HTML/XML tags and scripts/styles."""
     import re
     if not text:
         return ""
@@ -57,7 +53,6 @@ def clean_text(text):
     return text.strip()
 
 def emit_jsonl(docs: List[Dict], path: str, label: str):
-    """Append to JSONL file, one object per line."""
     with open(path, "a", encoding="utf-8") as f:
         for doc in docs:
             url = doc.get("ResourceUrl") or doc.get("Id") or doc.get("DocumentId") or doc.get("url") or doc.get("@odata.id")
@@ -71,32 +66,41 @@ def emit_jsonl(docs: List[Dict], path: str, label: str):
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 def push_to_hf(jsonl_path: str, repo_id: str, hf_token: str):
-    """Push JSONL shards to Hugging Face."""
     api = HfApi()
-    repo_files = []
+    # Get existing files in the Hugging Face repo (for true incremental upload)
+    try:
+        repo_files = set(api.list_repo_files(repo_id=repo_id, repo_type="dataset", token=hf_token))
+    except Exception as e:
+        logging.warning(f"Could not list remote files: {e}")
+        repo_files = set()
+
     if not os.path.exists(jsonl_path):
         logging.warning("No output file found.")
         return
-    # Split into shards to keep under 25MiB (max 300 records per shard, configurable)
+
     with open(jsonl_path, "r", encoding="utf-8") as f:
         lines = f.readlines()
     n = 0
     for i in range(0, len(lines), SHARD_SIZE):
         shard_lines = lines[i:i + SHARD_SIZE]
         shard_path = f"shard_{i}_{i+len(shard_lines)}.jsonl"
+        hf_dest = f"shards/{shard_path}"
+        if hf_dest in repo_files:
+            logging.info(f"Shard {hf_dest} already uploaded, skipping.")
+            continue
         with open(shard_path, "w", encoding="utf-8") as sf:
             sf.writelines(shard_lines)
         api.upload_file(
             path_or_fileobj=shard_path,
-            path_in_repo=f"shards/{shard_path}",
+            path_in_repo=hf_dest,
             repo_id=repo_id,
             repo_type="dataset",
             token=hf_token,
         )
-        repo_files.append(shard_path)
+        logging.info(f"Uploaded {hf_dest}")
         os.remove(shard_path)
         n += len(shard_lines)
-    logging.info(f"Pushed {n} entries in {len(repo_files)} shards to {repo_id}")
+    logging.info(f"Pushed {n} new entries in shards to {repo_id}")
 
 def main():
     state = load_state(STATE_PATH)
