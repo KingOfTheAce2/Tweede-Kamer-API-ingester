@@ -1,0 +1,22 @@
+name: Crawl Tweede Kamer OData
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 2 * * *'   # every night at 02:00
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run crawler
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: python crawler.py
