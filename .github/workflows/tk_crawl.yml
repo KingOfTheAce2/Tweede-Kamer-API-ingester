@@ -19,4 +19,4 @@ jobs:
       - name: Run crawler
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: python crawler.py
+        run: python json_crawler.py
